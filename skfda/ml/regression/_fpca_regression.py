@@ -1,6 +1,7 @@
+"""Functional Principal Component Analysis Regression Module."""
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from sklearn.utils.validation import check_is_fitted
 
@@ -11,6 +12,10 @@ from ...representation import FData
 from ...representation.basis import Basis, CustomBasis, FDataBasis
 from ...typing._numpy import NDArrayFloat
 from ._linear_regression import LinearRegression
+
+if TYPE_CHECKING:
+    from ...exploratory.stats.covariance import CovarianceEstimator
+    from ...representation.irregular import FDataIrregular
 
 FPCARegressionSelf = TypeVar("FPCARegressionSelf", bound="FPCARegression")
 
@@ -38,6 +43,17 @@ class FPCARegression(
         components_basis: Basis used for the principal components. If None
             then the basis of the input data is used. Defaults to None.
             It is only used if the input data is a FDataBasis object.
+        covariance_estimator: Estimator of the covariance operator of the
+            process, forwarded to the internal
+            :class:`~skfda.preprocessing.dim_reduction.FPCA` object. It
+            allows the regression to work directly on sparse and noisy
+            observations stored in a
+            :class:`~skfda.representation.FDataIrregular` object. Both the
+            training design matrix and the predictions then use the
+            principal component scores of each curve conditioned on its
+            noisy observations under the fitted Gaussian process model.
+            If ``None`` (the default), the classical analysis of
+            FDataGrid or FDataBasis data is performed.
 
     Attributes:
         n\_components\_: Number of principal components used.
@@ -75,12 +91,14 @@ class FPCARegression(
         pca_regularization: L2Regularization | None = None,
         regression_regularization: L2Regularization | None = None,
         components_basis: Basis | None = None,
+        covariance_estimator: CovarianceEstimator[FDataIrregular] | None = None,
     ) -> None:
         self.n_components = n_components
         self.fit_intercept = fit_intercept
         self.pca_regularization = pca_regularization
         self.regression_regularization = regression_regularization
         self.components_basis = components_basis
+        self.covariance_estimator = covariance_estimator
 
     def fit(
         self,
@@ -102,6 +120,7 @@ class FPCARegression(
             centering=True,
             regularization=self.pca_regularization,
             components_basis=self.components_basis,
+            covariance_estimator=self.covariance_estimator,
         )
         self._linear_model = LinearRegression(
             fit_intercept=self.fit_intercept,

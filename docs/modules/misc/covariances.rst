@@ -10,6 +10,7 @@ processes. These functions can be used as covariances in
 
    skfda.misc.covariances.Brownian
    skfda.misc.covariances.Covariance
+   skfda.misc.covariances.EigenExpansion
    skfda.misc.covariances.Exponential
    skfda.misc.covariances.Gaussian
    skfda.misc.covariances.Linear

@@ -966,3 +966,183 @@ class EmpiricalBasis(Empirical):
             argument_names=data.argument_names * 2,
             sample_names=("covariance",),
         )
+
+
+class EigenExpansion(Covariance):
+    r"""
+    Covariance function defined by a finite eigen-expansion on a grid.
+
+    The covariance function is
+
+    .. math::
+        K(s, t) = \sum_{k=1}^{r} \lambda_k \, \phi_k(s) \, \phi_k(t),
+
+    where the eigenfunctions :math:`\phi_k` are tabulated on a reference
+    grid and extended to the whole domain by linear interpolation, and the
+    eigenvalues :math:`\lambda_k` are nonnegative.
+
+    Because every eigenvalue is nonnegative, the kernel is symmetric and
+    positive semi-definite on *every* finite set of points of the domain,
+    including points that do not belong to the reference grid: for any
+    such set, the resulting matrix is a nonnegative combination of rank-one
+    outer products of the interpolated eigenfunctions. Note that the
+    eigenvectors do not need to be orthonormal for this to hold, although
+    they usually will be.
+
+    Args:
+        grid_points: One-dimensional, strictly increasing array of points
+            on which the eigenfunctions are tabulated. Its extremes define
+            the default domain of the kernel.
+        eigenvalues: One-dimensional array of nonnegative eigenvalues.
+        eigenvectors: Bidimensional array of shape
+            ``(len(grid_points), len(eigenvalues))`` whose columns are the
+            eigenfunctions evaluated at ``grid_points``.
+        domain_range: Domain of the kernel. Evaluations outside it raise
+            an error. If ``None``, it is inferred from the extremes of
+            ``grid_points``.
+
+    Attributes:
+        grid_points: Reference grid on which the eigenfunctions are
+            tabulated.
+        eigenvalues: Nonnegative eigenvalues of the expansion.
+        eigenvectors: Eigenfunctions tabulated on the reference grid.
+        domain_range: Domain of the kernel.
+
+    """
+
+    _latex_formula = (
+        r"K(s, t) = \sum_{k=1}^{r} \lambda_k \, \phi_k(s) \, \phi_k(t)"
+    )
+
+    _parameters_str: Sequence[tuple[str, str]] = []
+
+    def __init__(
+        self,
+        *,
+        grid_points: ArrayLike,
+        eigenvalues: ArrayLike,
+        eigenvectors: ArrayLike,
+        domain_range: Sequence[tuple[float, float]] | None = None,
+    ) -> None:
+        grid_points_array = np.asarray(grid_points, dtype=np.float64)
+        eigenvalues_array = np.asarray(eigenvalues, dtype=np.float64)
+        eigenvectors_array = np.asarray(eigenvectors, dtype=np.float64)
+
+        if grid_points_array.ndim != 1 or len(grid_points_array) < 2:
+            raise ValueError(
+                "grid_points must be a one-dimensional array with at "
+                "least two points.",
+            )
+        if not np.all(np.isfinite(grid_points_array)):
+            raise ValueError("grid_points must contain only finite values.")
+        if not np.all(np.diff(grid_points_array) > 0):
+            raise ValueError("grid_points must be strictly increasing.")
+
+        if eigenvalues_array.ndim != 1:
+            raise ValueError("eigenvalues must be a one-dimensional array.")
+        if not np.all(np.isfinite(eigenvalues_array)):
+            raise ValueError("eigenvalues must contain only finite values.")
+        if not np.all(eigenvalues_array >= 0):
+            raise ValueError(
+                "eigenvalues must be nonnegative, otherwise the kernel "
+                "is not positive semi-definite.",
+            )
+
+        expected_shape = (len(grid_points_array), len(eigenvalues_array))
+        if eigenvectors_array.shape != expected_shape:
+            raise ValueError(
+                f"eigenvectors must have shape {expected_shape}, but "
+                f"has shape {eigenvectors_array.shape}.",
+            )
+        if not np.all(np.isfinite(eigenvectors_array)):
+            raise ValueError("eigenvectors must contain only finite values.")
+
+        if domain_range is None:
+            domain_range = (
+                (grid_points_array[0], grid_points_array[-1]),
+            )
+
+        self.grid_points = grid_points_array
+        self.eigenvalues = eigenvalues_array
+        self.eigenvectors = eigenvectors_array
+        self.domain_range = tuple(
+            (float(start), float(end)) for start, end in domain_range
+        )
+
+    def _check_eval_points(
+        self,
+        points: NDArray[Any],
+        *,
+        name: str,
+    ) -> NDArrayFloat:
+        """Validate and ravel the evaluation points."""
+        points_array = np.asarray(points, dtype=np.float64)
+
+        if points_array.ndim > 2 or (
+            points_array.ndim == 2 and points_array.shape[1] != 1
+        ):
+            raise NotImplementedError(
+                f"{name} must be one-dimensional, as only univariate "
+                f"domains are supported, but it has shape "
+                f"{points_array.shape}.",
+            )
+
+        points_array = points_array.ravel()
+
+        if not np.all(np.isfinite(points_array)):
+            raise ValueError(f"{name} must contain only finite values.")
+
+        (domain_start, domain_end), = self.domain_range
+        if (
+            np.any(points_array < domain_start)
+            or np.any(points_array > domain_end)
+        ):
+            raise ValueError(
+                f"{name} must lie inside the domain of the kernel "
+                f"[{domain_start}, {domain_end}].",
+            )
+
+        return points_array
+
+    def _evaluate_eigenfunctions(self, points: NDArrayFloat) -> NDArrayFloat:
+        """Evaluate the interpolated eigenfunctions at the given points."""
+        return np.stack(
+            [
+                np.interp(points, self.grid_points, eigenvector)
+                for eigenvector in self.eigenvectors.T
+            ],
+            axis=1,
+        )
+
+    def __call__(
+        self,
+        x: NDArray[Any],
+        y: NDArray[Any] | None = None,
+    ) -> NDArrayFloat:
+        """Evaluate the covariance function.
+
+        Args:
+            x: First array of points of evaluation.
+            y: Second array of points of evaluation. If ``None``, ``x``
+                is used.
+
+        Returns:
+            Covariance function evaluated at the grid formed by x and y,
+            with shape ``(len(x), len(y))``.
+
+        """
+        if isinstance(x, FData) or isinstance(y, FData):
+            raise ValueError(
+                'EigenExpansion covariance not defined for FData objects.',
+            )
+
+        if y is None:
+            y = x
+
+        x_checked = self._check_eval_points(x, name="x")
+        y_checked = self._check_eval_points(y, name="y")
+
+        eigen_x = self._evaluate_eigenfunctions(x_checked)
+        eigen_y = self._evaluate_eigenfunctions(y_checked)
+
+        return (eigen_x * self.eigenvalues) @ eigen_y.T
